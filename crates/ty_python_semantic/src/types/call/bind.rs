@@ -6357,12 +6357,12 @@ impl<'db> CallInference<'_, 'db> {
 
         // Apply defaults separately in each alternative, preserving dependencies such as
         // `U = list[T]` before validating arguments or projecting the return type.
-        let specializations = alternatives.iter().map(|types| {
+        let specializations = Vec::from_iter(alternatives.iter().map(|types| {
             generic_context.specialize_recursive(
                 db,
                 types.iter().map(|binding| binding.and_then(resolved_type)),
             )
-        });
+        }));
 
         let relations: Vec<_> = self
             .argument_relations()
@@ -6375,7 +6375,7 @@ impl<'db> CallInference<'_, 'db> {
             .collect();
 
         let mut validated = Vec::with_capacity(specializations.len());
-        'specializations: for specialization in specializations {
+        'specializations: for &specialization in &specializations {
             // Recheck the original relations, including requirements that recursive protocol
             // inference may omit.
             for (relation, contributes_to_inference) in &relations {
@@ -6406,10 +6406,64 @@ impl<'db> CallInference<'_, 'db> {
             validated.push(specialization);
         }
 
-        if validated.is_empty() {
+        let refined_return = self.specialized_return_type(inference, &validated, &return_variables);
+        let expected_return = self
+            .call_expression_tcx
+            .annotation
+            .filter(|_| self.call_expression_tcx.is_declared());
+        let is_compatible_return = |ty: Type<'db>| {
+            expected_return
+                .is_none_or(|expected_return| ty.is_assignable_to(db, env, expected_return))
+        };
+        if refined_return.is_some_and(is_compatible_return) {
+            return refined_return;
+        }
+
+        let merged_specialization = inference.merged_specialization(db);
+        let accepts_merged_arguments = self.accepts_arguments(merged_specialization);
+        if accepts_merged_arguments
+            && is_compatible_return(
+                self.return_ty
+                    .apply_specialization(db, merged_specialization),
+            )
+        {
             return None;
         }
-        self.specialized_return_type(inference, &validated, &return_variables)
+
+        // Assignability can validate alternatives without proving their returns simultaneously.
+        // Union their specialized returns so that each keeps its own type-variable bindings.
+        let mut compatible_returns = Vec::new();
+        let mut fallback_returns = Vec::new();
+        let mut budget = ProjectionTypeBudget::new(SolutionBudget::default().type_terms);
+        for specialization in specializations {
+            if !self.accepts_arguments(specialization) {
+                continue;
+            }
+
+            let ty = self.return_ty.apply_specialization(db, specialization);
+            if budget.charge_type(db, ty).is_err() {
+                return refined_return;
+            }
+
+            if is_compatible_return(ty) {
+                compatible_returns.push(ty);
+            } else if refined_return.is_none()
+                && !accepts_merged_arguments
+                && compatible_returns.is_empty()
+            {
+                // Keep an argument-compatible return for diagnostics when the annotation is incompatible.
+                fallback_returns.push(ty);
+            }
+        }
+
+        if !compatible_returns.is_empty() {
+            return Some(UnionType::from_elements(db, env, compatible_returns));
+        }
+        if fallback_returns.is_empty() {
+            return refined_return;
+        }
+
+        Some(UnionType::from_elements(db, env, fallback_returns))
     }
 
     /// Projects the return type from specializations that each validate the whole call.
@@ -6498,16 +6552,7 @@ impl<'db> CallInference<'_, 'db> {
             let merged = inference.merged_specialization(db);
             // Preserve the existing merged return when that specialization accepts the call.
             // Otherwise, use the separate valid returns rather than an invalid merged mapping.
-            if self.argument_relations().all(|relation| {
-                relation
-                    .argument_type
-                    .apply_specialization(db, merged)
-                    .is_assignable_to(
-                        db,
-                        env,
-                        relation.declared_type.apply_specialization(db, merged),
-                    )
-            }) {
+            if self.accepts_arguments(merged) {
                 Some(self.return_ty.apply_specialization(db, merged))
             } else {
                 Some(UnionType::from_elements(db, env, returns))
@@ -6515,6 +6560,19 @@ impl<'db> CallInference<'_, 'db> {
         } else {
             IntersectionType::bounded_from_elements(db, env, returns)
         }
+    }
+
+    fn accepts_arguments(&self, specialization: Specialization<'db>) -> bool {
+        let db = self.db;
+        self.argument_relations().all(|relation| {
+            let actual = relation
+                .argument_type
+                .apply_specialization(db, specialization);
+            let formal = relation
+                .declared_type
+                .apply_specialization(db, specialization);
+            actual.is_assignable_to(db, self.env, formal)
+        })
     }
 
     fn infer(self, constraints: &ConstraintSetBuilder<'db>) -> InferredCall<'db> {
