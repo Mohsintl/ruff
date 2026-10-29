@@ -2730,12 +2730,7 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
                         })
                     })
                     .max();
-                self.constraints.signature_typevar_freshness.set(
-                    self.constraints
-                        .signature_typevar_freshness
-                        .get()
-                        .max(max_freshness),
-                );
+                self.constraints.reserve_freshness(max_freshness);
                 target_overloads
                     .iter()
                     .when_all(db, self.constraints, |target_signature| {
@@ -2812,7 +2807,7 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
         // them inferable for this relation. The relation only needs to find one specialization of
         // each generic callable that causes the check to succeed, but those callable-local
         // specializations must not collide with any same-source typevars in the other signature.
-        let max_freshness = self.constraints.signature_typevar_freshness.get();
+        let max_freshness = self.constraints.reserved_freshness();
         let freshened_source;
         let source = if (max_freshness.is_some()
             || signature_context(source) != signature_context(target))
@@ -2848,13 +2843,9 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
         let signature_inferable = source_inferable.merge(db, target_inferable);
         // Reserve these identities before checking receivers, parameters, or return types, any
         // of which can recursively compare more signatures using this builder.
-        self.constraints.signature_typevar_freshness.set(
-            signature_inferable
-                .iter(db)
-                .map(|typevar| typevar.freshness(db))
-                .max()
-                .max(max_freshness),
-        );
+        for var in signature_inferable.iter(db) {
+            self.constraints.reserve_typevar(db, var);
+        }
 
         let inferable = self.inferable.merge(db, signature_inferable);
 
