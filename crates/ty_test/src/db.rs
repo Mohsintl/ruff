@@ -354,7 +354,12 @@ fn mdtest_rule_selection(rules: Option<&Rules>, required_rule: Option<&str>) -> 
         // `missing-override-decorator` is an exception: because it is extremely pedantic we have
         // chosen to keep it opt-in to minimize churn in unrelated tests.
         "missing-override-decorator",
-        // Many examples omit parameter annotations to exercise inference or keep the setup short.
+        // Many examples omit annotations to exercise inference or keep the setup short.
+        "missing-return-type-public-function",
+        "missing-return-type-private-function",
+        "missing-return-type-special-method",
+        "missing-return-type-static-method",
+        "missing-return-type-class-method",
         "missing-type-function-argument",
         "missing-type-args",
         "missing-type-kwargs",

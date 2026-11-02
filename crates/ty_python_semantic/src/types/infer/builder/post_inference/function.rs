@@ -1,3 +1,4 @@
+use super::return_annotation::check_missing_return_annotation;
 use crate::{
     Db,
     diagnostic::format_enumeration,
@@ -49,6 +50,7 @@ pub(crate) fn check_function_definition<'db>(
     }
     let signature = last_definition.raw_signature(db, ReturnCallableTypeVarScope::Public);
 
+    check_missing_return_annotation(context, function_type);
     check_legacy_positional_only_convention(context, last_definition, &signature);
     check_pep695_function_legacy_typevars(context, last_definition, file_expression_type);
     check_legacy_typevar_defaults(context, last_definition, &signature, file_expression_type);
