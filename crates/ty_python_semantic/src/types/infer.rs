@@ -875,10 +875,16 @@ impl<'db> InferScope<'db> {
 #[derive(
     Default, Copy, Clone, Debug, PartialEq, Eq, Hash, get_size2::GetSize, salsa::SalsaValue,
 )]
-enum TypeContextKind {
+pub(super) enum TypeContextKind {
     /// A direct declared type annotation.
     #[default]
     Declared,
+
+    /// A constraint originating from inference evidence.
+    ///
+    /// During generic call inference, constraints inferred from call arguments are provided as
+    /// type context for subsequent inference attempts during fixpoint iteration.
+    Inferred,
 
     /// The declared upper bound of a type variable.
     ///
@@ -901,22 +907,28 @@ pub(crate) struct TypeContext<'db> {
 }
 
 impl<'db> TypeContext<'db> {
+    pub(super) fn new(annotation: Option<Type<'db>>, kind: TypeContextKind) -> Self {
+        Self { annotation, kind }
+    }
+
     pub(crate) fn declared(annotation: Option<Type<'db>>) -> Self {
-        Self {
-            annotation,
-            kind: TypeContextKind::Declared,
-        }
+        Self::new(annotation, TypeContextKind::Declared)
     }
 
     pub(crate) fn validity(annotation: Type<'db>) -> Self {
-        Self {
-            annotation: Some(annotation),
-            kind: TypeContextKind::Validity,
-        }
+        Self::new(Some(annotation), TypeContextKind::Validity)
     }
 
-    pub(crate) fn is_declared(self) -> bool {
-        matches!(self.kind, TypeContextKind::Declared)
+    pub(super) fn kind(self) -> TypeContextKind {
+        self.kind
+    }
+
+    pub(crate) fn is_inferred(self) -> bool {
+        matches!(self.kind, TypeContextKind::Inferred)
+    }
+
+    pub(crate) fn is_validity(self) -> bool {
+        matches!(self.kind, TypeContextKind::Validity)
     }
 
     /// If the type annotation is a specialized instance of the given `KnownClass`, returns the

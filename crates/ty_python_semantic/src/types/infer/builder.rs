@@ -54,8 +54,8 @@ use crate::types::abstract_methods::AbstractMethods;
 use crate::types::add_inferred_python_version_hint_to_diagnostic;
 use crate::types::attribute_write::{AssignmentAttributeMembers, assignment_attribute_members};
 use crate::types::call::bind::{
-    ArgumentTypeContext, CallableDescription, CheckTypesMode, OverloadSet,
-    requires_overload_evaluation,
+    ArgumentContextSpecialization, ArgumentTypeContext, CallableDescription, CheckTypesMode,
+    OverloadSet, requires_overload_evaluation,
 };
 use crate::types::call::{Binding, Bindings, CallArguments, CallError, CallErrorKind};
 use crate::types::callable::CallableTypeKind;
@@ -5973,6 +5973,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // We only need to attempt narrowing on generic calls, otherwise the type
             // context has no effect.
             .filter(|_| has_generic_context)
+            // We avoid narrowing against constraints that were inferred directly during fixpoint
+            // iteration.
+            .filter(|_| !call_expression_tcx.is_inferred())
             .unwrap_or_default();
 
         let is_concrete_literal = |ty: &Type<'db>| {
@@ -6393,10 +6396,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         constraints: &ConstraintSetBuilder<'db>,
         call_expression_tcx: TypeContext<'db>,
     ) -> Vec<Option<MatchingArgumentTypeContext<'db>>> {
+        type CachedSpecialization<'db> =
+            OnceCell<Option<Cow<'db, ArgumentContextSpecialization<'db>>>>;
         type OverloadsWithBinding<'a, 'db> = Vec<(
             &'a Binding<'db>,
             &'a CallableBinding<'db>,
-            OnceCell<Option<Specialization<'db>>>,
+            CachedSpecialization<'db>,
         )>;
 
         fn add_overloads_from_binding<'a, 'db>(
@@ -6440,7 +6445,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 let parameter_tcx =
                     |overload: &Binding<'db>,
                      binding: &CallableBinding<'db>,
-                     specialization: &OnceCell<Option<Specialization<'db>>>| {
+                     specialization: &CachedSpecialization<'db>| {
                         overload.argument_type_context(
                             db,
                             env,
@@ -6450,14 +6455,16 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                             argument_index,
                             call_expression_tcx,
                             || {
-                                *specialization.get_or_init(|| {
-                                    overload.argument_type_context_specialization(
-                                        db,
-                                        env,
-                                        constraints,
-                                        call_expression_tcx,
-                                    )
-                                })
+                                specialization
+                                    .get_or_init(|| {
+                                        overload.argument_type_context_specialization(
+                                            db,
+                                            env,
+                                            constraints,
+                                            call_expression_tcx,
+                                        )
+                                    })
+                                    .as_deref()
                             },
                         )
                     };
