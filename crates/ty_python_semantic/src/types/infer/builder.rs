@@ -12522,15 +12522,17 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     /// Infer the return type of a function body based on the types of
     /// expressions in reachable `return` statements.
     fn inferred_return_type(&self) -> Option<Type<'db>> {
-        if !self.settings().return_type_inference.is_active() {
-            return None;
-        }
-
         let db = self.db();
         let function = self.scope().node(db).as_function()?.node(self.module());
 
         // We never infer types for functions with an explicit return type annotation
         if function.returns.is_some() {
+            return None;
+        }
+
+        if !self.settings().return_type_inference.is_active()
+            && !post_inference::return_annotation::rules_enabled(db, self.file())
+        {
             return None;
         }
 

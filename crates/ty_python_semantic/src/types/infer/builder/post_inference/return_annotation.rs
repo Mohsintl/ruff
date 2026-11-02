@@ -1,15 +1,35 @@
+use ruff_db::files::File;
+use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::{self as ast, helpers::is_dunder, name::UnqualifiedName};
+use ruff_text_size::Ranged;
 use ty_module_resolver::file_to_module;
 use ty_python_core::{scope::NodeWithScopeKind, semantic_index};
 
+use crate::Db;
 use crate::dunder_all::dunder_all_names;
+use crate::lint::LintId;
 use crate::types::context::InferContext;
 use crate::types::diagnostic::{
     MISSING_RETURN_TYPE_CLASS_METHOD, MISSING_RETURN_TYPE_PRIVATE_FUNCTION,
     MISSING_RETURN_TYPE_PUBLIC_FUNCTION, MISSING_RETURN_TYPE_SPECIAL_METHOD,
     MISSING_RETURN_TYPE_STATIC_METHOD,
 };
-use crate::types::function::FunctionType;
+use crate::types::function::{FunctionType, InferredReturnTypeFor};
+
+#[salsa::tracked]
+pub(in crate::types) fn rules_enabled(db: &dyn Db, file: File) -> bool {
+    let selection = db.rule_selection(file);
+    db.should_check_file(file)
+        && [
+            &MISSING_RETURN_TYPE_PUBLIC_FUNCTION,
+            &MISSING_RETURN_TYPE_PRIVATE_FUNCTION,
+            &MISSING_RETURN_TYPE_SPECIAL_METHOD,
+            &MISSING_RETURN_TYPE_STATIC_METHOD,
+            &MISSING_RETURN_TYPE_CLASS_METHOD,
+        ]
+        .into_iter()
+        .any(|rule| selection.get(LintId::of(rule)).is_some())
+}
 
 pub(super) fn check_missing_return_annotation<'db>(
     context: &InferContext<'db, '_>,
@@ -18,20 +38,9 @@ pub(super) fn check_missing_return_annotation<'db>(
     let db = context.db();
     let literal = function_type.literal(db);
     let last_definition = literal.last_definition;
-    if last_definition.has_explicit_return_annotation(db) || literal.has_separate_implementation(db)
-    {
-        return;
-    }
-
-    if ![
-        &MISSING_RETURN_TYPE_PUBLIC_FUNCTION,
-        &MISSING_RETURN_TYPE_PRIVATE_FUNCTION,
-        &MISSING_RETURN_TYPE_SPECIAL_METHOD,
-        &MISSING_RETURN_TYPE_STATIC_METHOD,
-        &MISSING_RETURN_TYPE_CLASS_METHOD,
-    ]
-    .into_iter()
-    .any(|rule| context.is_lint_enabled(rule))
+    if last_definition.has_explicit_return_annotation(db)
+        || literal.has_separate_implementation(db)
+        || !rules_enabled(db, context.file())
     {
         return;
     }
@@ -54,9 +63,49 @@ pub(super) fn check_missing_return_annotation<'db>(
     let Some(builder) = context.report_lint(lint, name) else {
         return;
     };
-    builder.into_diagnostic(format_args!(
+    let mut diagnostic = builder.into_diagnostic(format_args!(
         "Missing return type annotation for {kind} `{name}`"
     ));
+    if let Some((annotation, imports)) =
+        suggested_annotation(context, function, function_type, is_method)
+    {
+        diagnostic.help(format_args!("Add return type annotation `{annotation}`"));
+        diagnostic.set_fix(Fix::unsafe_edits(
+            Edit::insertion(format!(" -> {annotation}"), function.parameters.end()),
+            imports,
+        ));
+    }
+}
+
+fn suggested_annotation<'db>(
+    context: &InferContext<'db, '_>,
+    function: &ast::StmtFunctionDef,
+    function_type: FunctionType<'db>,
+    is_method: bool,
+) -> Option<(String, Vec<Edit>)> {
+    if is_method && function.name.as_str() == "__init__" {
+        return Some((String::from("None"), Vec::new()));
+    }
+    let db = context.db();
+    let overload = function_type.literal(db).last_definition;
+    if function.is_async
+        || overload.is_overload(db)
+        || context.file().is_stub(db)
+        || function_type.has_trivial_body(db)
+    {
+        return None;
+    }
+    let env = context.program_environment();
+    let ty = function_type.inferred_return_type(db, InferredReturnTypeFor::Annotation);
+    if ty.has_dynamic(db, env) {
+        return None;
+    }
+    let details = ty.promote(db, env).display(db, env).to_string_parts();
+    let index = semantic_index(db, context.program_file());
+    let annotation_scope = index.parent_scope_id(overload.body_scope(db).file_scope_id(db))?;
+    context
+        .importer()
+        .type_annotation(&details, annotation_scope, function.parameters.end())
 }
 
 fn is_private(

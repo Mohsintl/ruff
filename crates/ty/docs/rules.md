@@ -4297,6 +4297,9 @@ Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.96">0.0.96</a
 
 Checks for class methods without a return type annotation.
 
+When ty can infer an annotation from the implementation, it offers an unsafe fix. This works even
+when return type inference is disabled for calls.
+
 **Why is this bad?**
 
 
@@ -4341,6 +4344,9 @@ Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.96">0.0.96</a
 
 Checks for private functions and methods without a return type annotation.
 
+When ty can infer an annotation from the implementation, it offers an unsafe fix. This works even
+when return type inference is disabled for calls.
+
 **Why is this bad?**
 
 
@@ -4377,6 +4383,9 @@ Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.96">0.0.96</a
 
 Checks for public functions and methods without a return type annotation.
 
+When ty can infer an annotation from the implementation, it offers an unsafe fix. This works even
+when return type inference is disabled for calls.
+
 **Why is this bad?**
 
 
@@ -4412,6 +4421,9 @@ Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.96">0.0.96</a
 
 
 Checks for special methods without a return type annotation.
+
+When ty can infer an annotation from the implementation, it offers an unsafe fix. This works even
+when return type inference is disabled for calls.
 
 **Why is this bad?**
 
@@ -4450,6 +4462,9 @@ Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.96">0.0.96</a
 
 
 Checks for static methods without a return type annotation.
+
+When ty can infer an annotation from the implementation, it offers an unsafe fix. This works even
+when return type inference is disabled for calls.
 
 **Why is this bad?**
 
